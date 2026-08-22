@@ -260,7 +260,8 @@ def numerical_roots(expr, var, a, b, num_points=500):
     roots = []
     try:
         expr_func = sp.lambdify(var, expr, 'numpy')
-        y_vals = expr_func(x_vals)
+        with np.errstate(invalid='ignore', divide='ignore'):
+            y_vals = expr_func(x_vals)
         if np.isscalar(y_vals):
             y_vals = np.full_like(x_vals, y_vals)
         for i in range(len(x_vals)-1):
@@ -269,12 +270,18 @@ def numerical_roots(expr, var, a, b, num_points=500):
                 if np.isfinite(val1) and np.isfinite(val2):
                     if np.sign(val1) * np.sign(val2) < 0:
                         def eq_func(v):
-                            res = expr_func(v[0]) 
+                            with np.errstate(invalid='ignore', divide='ignore'):
+                                res = expr_func(v[0]) 
                             return float(res) if np.isfinite(float(res)) else 0.0
                         root_array = fsolve(eq_func, (x_vals[i] + x_vals[i+1]) / 2)
                         root = float(root_array[0])
-                        if a <= root <= b and not any(abs(root - r) < 1e-6 for r in roots):
-                            roots.append(root)
+                        # Verificação agressiva do zero (evita que assíntotas sejam lidas como raiz)
+                        try:
+                            if abs(float(expr_func(root))) < 1e-2:
+                                if a <= root <= b and not any(abs(root - r) < 1e-6 for r in roots):
+                                    roots.append(root)
+                        except Exception:
+                            pass
                     elif val1 == 0.0:
                         root = float(x_vals[i])
                         if a <= root <= b and not any(abs(root - r) < 1e-6 for r in roots):
@@ -282,7 +289,7 @@ def numerical_roots(expr, var, a, b, num_points=500):
             except Exception:
                 continue 
     except Exception as e:
-        print(f"Erro no rastreio numérico de raízes: {e}")
+        pass
     return sorted(roots)
 
 def ajustar_amostragem(lower, upper, num_points_base=200):
@@ -431,7 +438,8 @@ def plot_grafico():
 
             func_numeric = sp.lambdify(x, func_sym, 'numpy')
             x_vals = ajustar_amostragem(lower, upper)
-            y_vals = func_numeric(x_vals)
+            with np.errstate(invalid='ignore', divide='ignore'):
+                y_vals = func_numeric(x_vals)
             ax.plot(x_vals, y_vals, label=f'${sp.latex(func_sym)}$ in [{lower},{upper}]', linewidth=2.5, color=f'C{i}')
 
             # --- Assíntotas Verticais ---
@@ -447,7 +455,7 @@ def plot_grafico():
                     if lower < asy_val < upper:
                         ax.axvline(asy_val, color='magenta', linestyle='--', linewidth=2)
                         result_text += f'Assíntota vertical em x = {asy_val:.2f}\n' if idioma_atual == "PT" else f'Vertical asymptote at x = {asy_val:.2f}\n'
-            except Exception as e:
+            except Exception:
                 pass
 
             # --- Assíntotas Horizontais ---
@@ -459,7 +467,7 @@ def plot_grafico():
                         lim_val = float(lim.evalf())
                         ax.axhline(lim_val, color='cyan', linestyle='--', linewidth=2)
                         result_text += f'Assíntota horizontal em y = {lim_val:.2f} (limite em {side})\n' if idioma_atual == "PT" else f'Horizontal asymptote at y = {lim_val:.2f} (limit at {side})\n'
-            except Exception as e:
+            except Exception:
                 pass
 
             # --- Assíntotas Oblíquas ---
@@ -468,83 +476,111 @@ def plot_grafico():
                 if coef is not None and intercept is not None:
                     ax.axline((0, float(intercept)), slope=float(coef), color='orange', linestyle='--')
                     result_text += f'Assíntota oblíqua: y = {float(coef):.2f}x + {float(intercept):.2f}\n' if idioma_atual == "PT" else f'Oblique asymptote: y = {float(coef):.2f}x + {float(intercept):.2f}\n'
-            except Exception as e:
+            except Exception:
                 pass
 
-            # --- Pontos críticos e inflexões ---
+            # --- Derivadas base ---
+            fprime = fsecond = None
             try:
                 fprime, fsecond = calcular_derivadas(func_sym, x)
-                cp = numerical_roots(fprime, x, lower, upper)
-                ip = numerical_roots(fsecond, x, lower, upper)
+            except Exception:
+                pass
+
+            if fprime is not None and fsecond is not None:
+                cp = []
+                ip = []
+                try:
+                    cp = numerical_roots(fprime, x, lower, upper)
+                except Exception: pass
+                try:
+                    ip = numerical_roots(fsecond, x, lower, upper)
+                except Exception: pass
 
                 if show_points_var.get():
                     colors = ['#e41a1c', '#4daf4a', '#ff7f00', '#984ea3', '#377eb8']
                     markers = ['^', 'v', 'D', 'o', 's']
                     for p, color, marker in zip(cp, colors[:len(cp)], markers[:len(cp)]):
                         try:
-                            y_p = float(func_sym.subs(x, p).evalf())
-                            fsecond_val = float(fsecond.subs(x, p).evalf())
-                            
-                            if idioma_atual == "PT":
-                                point_type = "Máximo" if fsecond_val < 0 else "Mínimo" if fsecond_val > 0 else "Sela"
-                                point_label = f'{point_type}\nlocal em ({p:.2f}, {y_p:.2f})'
-                            else:
-                                point_type = "Maximum" if fsecond_val < 0 else "Minimum" if fsecond_val > 0 else "Saddle"
-                                point_label = f'Local {point_type.lower()} at ({p:.2f}, {y_p:.2f})'
-                                
-                        except Exception:
-                            y_p = float(func_sym.subs(x, p).evalf())
-                            point_type = "Crítico" if idioma_atual == "PT" else "Critical"
-                            point_label = f'Ponto {point_type.lower()} em ({p:.2f}, {y_p:.2f})' if idioma_atual == "PT" else f'Local {point_type.lower()} at ({p:.2f}, {y_p:.2f})'
-                            color, marker = '#984ea3', 'o'
+                            # Tenta processar silenciosamente; aborta APENAS ESTE PONTO se der conversões complexas
+                            y_eval = func_sym.subs(x, p).evalf()
+                            if not y_eval.is_real: continue
+                            y_p = float(y_eval)
+                            if not np.isfinite(y_p): continue
 
-                        ax.scatter(p, y_p, color=color, marker=marker, s=100, edgecolors='black', zorder=6)
-                        ax.annotate(
-                            f'{point_type}\n({p:.2f}, {y_p:.2f})',
-                            xy=(p, y_p), xytext=(p + 0.4, y_p + (0.4 if point_type in ["Maximum", "Máximo"] else -0.4)),
-                            textcoords='data', fontsize=10, fontweight='bold', color='white',
-                            bbox=dict(boxstyle='round,pad=0.3', fc=color, ec='none'),
-                            arrowprops=dict(arrowstyle='-|>', color=color, lw=1.5), zorder=7
-                        )
-                        result_text += f'{point_label}\n'
+                            try:
+                                fsecond_val = float(fsecond.subs(x, p).evalf())
+                                if idioma_atual == "PT":
+                                    point_type = "Máximo" if fsecond_val < 0 else "Mínimo" if fsecond_val > 0 else "Sela"
+                                    point_label = f'{point_type} local em ({p:.2f}, {y_p:.2f})'
+                                else:
+                                    point_type = "Maximum" if fsecond_val < 0 else "Minimum" if fsecond_val > 0 else "Saddle"
+                                    point_label = f'Local {point_type.lower()} at ({p:.2f}, {y_p:.2f})'
+                            except Exception:
+                                point_type = "Crítico" if idioma_atual == "PT" else "Critical"
+                                point_label = f'Ponto {point_type.lower()} em ({p:.2f}, {y_p:.2f})' if idioma_atual == "PT" else f'Local {point_type.lower()} at ({p:.2f}, {y_p:.2f})'
+                                color, marker = '#984ea3', 'o'
+
+                            ax.scatter(p, y_p, color=color, marker=marker, s=100, edgecolors='black', zorder=6)
+                            ax.annotate(
+                                f'{point_type}\n({p:.2f}, {y_p:.2f})',
+                                xy=(p, y_p), xytext=(p + 0.4, y_p + (0.4 if point_type in ["Maximum", "Máximo"] else -0.4)),
+                                textcoords='data', fontsize=10, fontweight='bold', color='white',
+                                bbox=dict(boxstyle='round,pad=0.3', fc=color, ec='none'),
+                                arrowprops=dict(arrowstyle='-|>', color=color, lw=1.5), zorder=7
+                            )
+                            result_text += f'{point_label}\n'
+                        except Exception:
+                            continue
 
                     for p in ip:
-                        y_p = float(func_sym.subs(x, p).evalf())
-                        str_inf = "Inflexão" if idioma_atual == "PT" else "Inflection"
-                        ax.scatter(p, y_p, color='#377eb8', marker='s', s=100, edgecolors='black', zorder=6)
-                        ax.annotate(
-                            f'{str_inf}\n({p:.2f}, {y_p:.2f})',
-                            xy=(p, y_p), xytext=(p + 0.4, y_p + 0.4), textcoords='data',
-                            fontsize=10, fontweight='bold', color='white',
-                            bbox=dict(boxstyle='round,pad=0.3', fc='#377eb8', ec='none'),
-                            arrowprops=dict(arrowstyle='-|>', color='#377eb8', lw=1.5), zorder=7
-                        )
-                        result_text += f'Inflexão local em ({p:.2f}, {y_p:.2f})\n' if idioma_atual == "PT" else f'Local inflection at ({p:.2f}, {y_p:.2f})\n'
-                else:
-                    if i == 0: 
-                        result_text += "Pontos não mostrados explicitamente (caixa desmarcada).\n" if idioma_atual == "PT" else "Points not explicitly shown (checkbox disabled).\n"
+                        try:
+                            y_eval = func_sym.subs(x, p).evalf()
+                            if not y_eval.is_real: continue
+                            y_p = float(y_eval)
+                            if not np.isfinite(y_p): continue
+                            
+                            str_inf = "Inflexão" if idioma_atual == "PT" else "Inflection"
+                            ax.scatter(p, y_p, color='#377eb8', marker='s', s=100, edgecolors='black', zorder=6)
+                            ax.annotate(
+                                f'{str_inf}\n({p:.2f}, {y_p:.2f})',
+                                xy=(p, y_p), xytext=(p + 0.4, y_p + 0.4), textcoords='data',
+                                fontsize=10, fontweight='bold', color='white',
+                                bbox=dict(boxstyle='round,pad=0.3', fc='#377eb8', ec='none'),
+                                arrowprops=dict(arrowstyle='-|>', color='#377eb8', lw=1.5), zorder=7
+                            )
+                            result_text += f'Inflexão local em ({p:.2f}, {y_p:.2f})\n' if idioma_atual == "PT" else f'Local inflection at ({p:.2f}, {y_p:.2f})\n'
+                        except Exception:
+                            continue
 
                 # --- Crescimento/Decrescimento ---
-                growth_points = sorted(list(set([lower] + cp + [upper])))
-                for j in range(len(growth_points) - 1):
-                    mid = (growth_points[j] + growth_points[j+1]) / 2
-                    try:
-                        derivative_mid = float(fprime.subs(x, mid).evalf())
-                        if derivative_mid > 0:
-                            result_text += f'Crescimento em [{growth_points[j]:.2f}, {growth_points[j+1]:.2f}]\n' if idioma_atual == "PT" else f'Growth in [{growth_points[j]:.2f}, {growth_points[j+1]:.2f}]\n'
-                        elif derivative_mid < 0:
-                            result_text += f'Decrescimento em [{growth_points[j]:.2f}, {growth_points[j+1]:.2f}]\n' if idioma_atual == "PT" else f'Decrease in [{growth_points[j]:.2f}, {growth_points[j+1]:.2f}]\n'
-                        else:
-                            result_text += f'Constante em [{growth_points[j]:.2f}, {growth_points[j+1]:.2f}]\n' if idioma_atual == "PT" else f'Constant in [{growth_points[j]:.2f}, {growth_points[j+1]:.2f}]\n'
-                    except Exception:
-                        continue
+                try:
+                    growth_points = sorted(list(set([lower] + cp + [upper])))
+                    for j in range(len(growth_points) - 1):
+                        mid = (growth_points[j] + growth_points[j+1]) / 2
+                        try:
+                            derivative_mid = float(fprime.subs(x, mid).evalf())
+                            if derivative_mid > 0:
+                                result_text += f'Crescimento em [{growth_points[j]:.2f}, {growth_points[j+1]:.2f}]\n' if idioma_atual == "PT" else f'Growth in [{growth_points[j]:.2f}, {growth_points[j+1]:.2f}]\n'
+                            elif derivative_mid < 0:
+                                result_text += f'Decrescimento em [{growth_points[j]:.2f}, {growth_points[j+1]:.2f}]\n' if idioma_atual == "PT" else f'Decrease in [{growth_points[j]:.2f}, {growth_points[j+1]:.2f}]\n'
+                            else:
+                                result_text += f'Constante em [{growth_points[j]:.2f}, {growth_points[j+1]:.2f}]\n' if idioma_atual == "PT" else f'Constant in [{growth_points[j]:.2f}, {growth_points[j+1]:.2f}]\n'
+                        except Exception:
+                            continue
+                except Exception:
+                    pass
 
                 # --- Concavidade ---
                 if show_points_var.get():
                     try:
                         conc_points = [float(p) for p in ip]
-                        sing2 = [s for s in sp.singularities(fsecond, x) if s.is_real]
-                        sing2 = [float(s.evalf()) for s in sing2]
+                        sing2 = []
+                        try:
+                            sings = sp.singularities(fsecond, x)
+                            if isinstance(sings, sp.FiniteSet) or isinstance(sings, set) or isinstance(sings, list):
+                                sing2 = [float(s.evalf()) for s in sings if getattr(s, 'is_real', False)]
+                        except Exception:
+                            pass
 
                         internal_points = sorted(set([p for p in conc_points + sing2 if lower < p < upper]))
                         breakpoints = sorted(list(set([lower] + internal_points + [upper])))
@@ -577,10 +613,8 @@ def plot_grafico():
                                 ax.axvspan(a, b, alpha=0.12, facecolor='red', zorder=1, label=label_c if not conc_down_labeled else None)
                                 conc_down_labeled = True
                                 result_text += f'Concavidade negativa em [{a:.2f}, {b:.2f}]\n' if idioma_atual == "PT" else f'Negative concavity in [{a:.2f}, {b:.2f}]\n'
-                    except Exception as e:
+                    except Exception:
                         pass
-            except Exception as e:
-                pass
         # ================= FIM DO BLOCO ANALÍTICO RESTAURADO =================
 
         ax.axhline(0, color='black', lw=1.2, linestyle='dashed', zorder=3)
@@ -647,7 +681,6 @@ def calculo_dominio_imagem():
 def calculo_integral():
     global resultado_text_integral, entrada_integrais, entrada_limite_inf, entrada_limite_sup
     try:
-        # APLICANDO VALIDAR_ENTRADA PARA EVITAR ERROS COM ^ E SEN NA INTEGRAL
         func_str = validar_entrada(entrada_integrais.get())
         x = sp.symbols('x')
         func = sp.sympify(func_str)
@@ -669,27 +702,36 @@ def calculo_integral():
 def plot_func_tangente():
     try:
         x = sp.Symbol('x')
-        # AQUI FOI CORRIGIDO O BUG DA TANGENTE: VALIDAR ENTRADA IMPLEMENTADO
         func_str = validar_entrada(entradaderiv.get())
         func = sp.sympify(func_str)
         point = float(sp.sympify(entradaponto.get()))
+        
+        y_point = func.subs(x, point).evalf()
+        if not y_point.is_real or not np.isfinite(float(y_point)):
+            messagebox.showerror("Error", "A função não é real/definida neste ponto." if idioma_atual == "PT" else "Function is not real/defined at this point.")
+            return
+            
         derivada = sp.diff(func, x)
-        coef_angular = derivada.subs(x, point)
+        coef_angular = derivada.subs(x, point).evalf()
+        if not coef_angular.is_real or not np.isfinite(float(coef_angular)):
+            messagebox.showerror("Error", "A derivada não é real/definida neste ponto." if idioma_atual == "PT" else "Derivative is not real/defined at this point.")
+            return
+            
         reta = func.subs(x, point) + coef_angular * (x - point)
         func_num = sp.lambdify(x, func, "numpy")
         reta_num = sp.lambdify(x, reta, "numpy")
         x_vals = np.linspace(point - 10, point + 10, 400)
         
         plt.figure()
-        y_func = func_num(x_vals)
-        if np.isscalar(y_func):
-            y_func = np.full_like(x_vals, y_func)
-        y_reta = reta_num(x_vals)
-        if np.isscalar(y_reta):
-            y_reta = np.full_like(x_vals, y_reta)
-            
+        with np.errstate(invalid='ignore', divide='ignore'):
+            y_func = func_num(x_vals)
+            if np.isscalar(y_func):
+                y_func = np.full_like(x_vals, y_func)
+            y_reta = reta_num(x_vals)
+            if np.isscalar(y_reta):
+                y_reta = np.full_like(x_vals, y_reta)
+                
         plt.plot(x_vals, y_func, label=f"f(x) = {func_str}")
-        
         lbl_tangent = f"Tangente em x = {point}" if idioma_atual == "PT" else f"Tangent at x = {point}"
         plt.plot(x_vals, y_reta, label=lbl_tangent)
         plt.axhline(0, color='red', lw=0.8)
@@ -704,7 +746,6 @@ def plot_func_tangente():
 
 def aplicar_lhopital(f_str, g_str, ponto_str, direcao='Both'):
     from sympy import limit, sympify, diff, simplify
-    # APLICANDO VALIDAR_ENTRADA
     f = sympify(validar_entrada(f_str))
     g = sympify(validar_entrada(g_str))
     ponto = sympify(ponto_str)
